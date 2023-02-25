@@ -284,3 +284,133 @@ def relax_inpocket_MMFF(rd_mol, rec_mol):
     tmp_mol.RemoveAllConformers()
     tmp_mol.AddConformer(rd_conf)
     return tmp_mol
+
+
+def get_torsions(m):
+    m = Chem.RemoveHs(m)
+    torsionList = []
+    torsionSmarts = "[!$(*#*)&!D1]-&!@[!$(*#*)&!D1]"
+    torsionQuery = Chem.MolFromSmarts(torsionSmarts)
+    matches = m.GetSubstructMatches(torsionQuery)
+    for match in matches:
+        idx2 = match[0]
+        idx3 = match[1]
+        bond = m.GetBondBetweenAtoms(idx2, idx3)
+        jAtom = m.GetAtomWithIdx(idx2)
+        kAtom = m.GetAtomWithIdx(idx3)
+        for b1 in jAtom.GetBonds():
+            if b1.GetIdx() == bond.GetIdx():
+                continue
+            idx1 = b1.GetOtherAtomIdx(idx2)
+            for b2 in kAtom.GetBonds():
+                if (b2.GetIdx() == bond.GetIdx()) or (b2.GetIdx() == b1.GetIdx()):
+                    continue
+                idx4 = b2.GetOtherAtomIdx(idx3)
+                # skip 3-membered rings
+                if idx4 == idx1:
+                    continue
+                # skip torsions that include hydrogens
+                if (m.GetAtomWithIdx(idx1).GetAtomicNum() == 1) or (
+                    m.GetAtomWithIdx(idx4).GetAtomicNum() == 1
+                ):
+                    continue
+                if m.GetAtomWithIdx(idx4).IsInRing():
+                    torsionList.append((idx4, idx3, idx2, idx1))
+                    break
+                else:
+                    torsionList.append((idx1, idx2, idx3, idx4))
+                    break
+            break
+    return torsionList
+
+from rdkit.Chem import rdMolTransforms
+def SetDihedral(conf, atom_idx, new_vale):
+    rdMolTransforms.SetDihedralRad(
+        conf, atom_idx[0], atom_idx[1], atom_idx[2], atom_idx[3], new_vale
+    )
+
+def single_conf_gen_bonds(tgt_mol, num_confs=1000, seed=42):
+    mol = copy.deepcopy(tgt_mol)
+    rotable_bonds = get_torsions(mol)
+    bond_mols = []
+    for i in range(num_confs):
+        tmp_mol = copy.deepcopy(mol)
+        values = 3.1415926 * 2 * np.random.rand(len(rotable_bonds))
+        for idx in range(len(rotable_bonds)):
+            SetDihedral(tmp_mol.GetConformers()[0], rotable_bonds[idx], values[idx])
+        bond_mols.append(tmp_mol)
+
+    return bond_mols
+
+def optimize_mol(mol):
+    mol = Chem.AddHs(mol)
+    AllChem.MMFFOptimizeMolecule(mol)
+    return Chem.RemoveHs(mol)
+
+import torch
+def reconstruct_xyz(d_target, edge_index, init_pos, edge_order=None, alpha=0.5, mu=0, step_size=None, num_steps=None, verbose=0):
+    assert torch.is_grad_enabled, 'the optimization procedure needs gradient to iterate'
+    step_size = 8.0 if step_size is None else step_size
+    num_steps = 1000 if num_steps is None else num_steps
+    pos_vecs = []
+
+    d_target = d_target.view(-1)
+    pos = init_pos.clone().requires_grad_(True)
+    optimizer = torch.optim.Adam([pos], lr=step_size)
+
+    #different hop contributes to different loss 
+    if edge_order is not None:
+        coef = alpha ** (edge_order.view(-1).float() - 1)
+    else:
+        coef = 1.0
+    
+    if mu>0:
+        noise = torch.randn_like(coef) * coef * mu + coef
+        noise = torch.clamp_min(coef+noise, min=0)
+    
+    for i in range(num_steps):
+        optimizer.zero_grad()
+        d_new = torch.norm(pos[edge_index[0]] - pos[edge_index[1]], dim=1)
+        loss = (coef * (d_target - d_new)**2).sum()
+        loss.backward()
+        optimizer.step()
+        pos_vecs.append(pos.detach().cpu())
+        avg_loss = loss.item() / d_target.size(0)
+        #if verbose & (i%10 == 0):
+        #    print('Reconstruction Loss: AvgLoss %.6f' % avg_loss)
+    pos_vecs = torch.stack(pos_vecs, dim=0)
+    avg_loss = loss.item() / d_target.size(0)
+    if verbose:
+        print('Reconstruction Loss: AvgLoss %.6f' % avg_loss)
+    
+    return pos_vecs, avg_loss
+
+class Reconstruct_xyz(object):
+    
+    def __init__(self, alpha=0.5, mu=0, step_size=8.0, num_steps=1000, verbose=0):
+        super().__init__()
+        self.alpha = alpha
+        self.mu = mu
+        self.step_size = step_size
+        self.num_stpes = num_steps
+        self.verbose = verbose
+    
+    def __call__(self, d_target, edge_index, init_pos, edge_order=None):
+        return reconstruct_xyz(
+            d_target, edge_index, init_pos, edge_order, 
+            alpha=self.alpha, 
+            mu = self.mu, 
+            step_size = self.step_size,
+            num_steps = self.num_stpes,
+            verbose = self.verbose
+        )
+
+def cluster_smis(mols):
+    smis2mols = {}
+    for mol in mols:
+        smi = Chem.MolToSmiles(mol)
+        try:
+            smis2mols[smi].append(mol)
+        except:
+            smis2mols[smi] = []
+    return smis2mols
