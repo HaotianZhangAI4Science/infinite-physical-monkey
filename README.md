@@ -12,7 +12,7 @@ Generate non-parameter molecules with
 python inp_phy_mon_MCG.py
 ```
 
-The dataset could be downloaded [here](https://drive.google.com/drive/folders/10dWaj5lyMY0VY4Zl0zDPCa69cuQUGb-6?usp=sharing). Or prepare from GEOM dataset locally, details could be found at [ConfGF](https://github.com/DeepGraphLearning/ConfGF). 
+The dataset could be downloaded [here](https://drive.google.com/drive/folders/10dWaj5lyMY0VY4Zl0zDPCa69cuQUGb-6?usp=sharing). Or prepare from GEOM dataset locally, details could be found at [ConfGF](https://github.com/DeepGraphLearning/ConfGF). If download the training data is inconvenient for you, please use the prepared [statistical information](https://drive.google.com/file/d/1yXR5_Exloic_5bA3nB6AbzhFQEqSl4_N/view?usp=share_link).
 
 #### infinite physical monkey for molecular conformation generation
 
